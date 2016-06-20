@@ -21,6 +21,8 @@ type alias Model = { t : Float, angx : Float, angy : Float
                    , evolve : Bool  
                    , evolutionSpeed : Int
                    , ndt : Int -- 1..5
+                   , evolver : DiffVecSpace (Array Complex)
+                   , potential : Float -> Float
                    , psyLeg : Bool
                    , dx : Display
                    , dx2 : Display
@@ -35,6 +37,8 @@ initialState = { t=0, angx=0, angy=0, drag=False, oldpos={x=0, y=0}, psy = initQ
                , evolve = False
                , evolutionSpeed = 5
                , ndt = 2
+               , evolver = mkEvolver timeDerFree
+               , potential = always 0.0
                , psyLeg = False
                , dx = {show=False, leg=False}
                , dx2 = {show=False, leg=False}
@@ -64,13 +68,20 @@ waveFunctions = [
      "Gauss: e^(-x^2)"),
     (euler,
      "Euler: e^(i*x)"),
-    (\x -> mult (complex (e ^ (-0.3*x*x)) 0) (Complex.add (euler (x*2)) (euler (x*3))),
+    (\x -> mult (complex (e ^ (-0.6*x*x)) 0) (Complex.add (euler (x*2)) (euler (x*3))),
      "particle w=2 + w=3"),
-    (\x -> mult (complex (e ^ (-0.3*x*x)) 0) (Complex.add (euler (x*2)) (euler (-x*3))),
+    (\x -> mult (complex (e ^ (-0.6*x*x)) 0) (Complex.add (euler (x*2)) (euler (-x*3))),
      "particle w=2 + w=-3")
   ]
 
 particle x = mult (complex (e ^ (-1.5*x*x)) 0) (euler (x*2.0))
+
+-- potentials
+potentials = [
+  (timeDerFree, "V=0, free particle", always 0.0),
+  (timeDerLinearPotential, "V(x) = 8 * x, linear potential", \x -> 8.0 * x),
+  (timeDerHarmonic, "V(x) = 10*x*x, harmonic oscillator", \x -> 10*x*x)
+ ] 
 
 -- constants
 sizeQS = 1000 -- number of points in array
@@ -95,7 +106,8 @@ type Action = MouseMove Mouse.Position
             | IncEvSpd
             | DecEvSpd
             | Say String
-            | Selected String
+            | WaveFun String
+            | Potential String
 
 getDisplay mdl func = case func of
   Dx -> mdl.dx
@@ -126,7 +138,8 @@ main = Html.program
     , update = updateModel
     }
 
-nextState a spd ndt = List.foldl (\i s -> evolveRK quantumState (0.0001* toFloat ndt) s) a [1..spd] |> tieEnds
+nextState a spd ndt evolver = 
+  List.foldl (\i s -> evolveRK evolver (0.0001* toFloat ndt) s) a [1..spd] |> tieEnds
 
 tieEnds a = Array.indexedMap (\i v -> 
   if i < 50 then mult (complex (toFloat i / 50.0) 0) v
@@ -140,7 +153,7 @@ updateModel msg model =
              MouseBttn down -> {model | drag = down}
              NewFrame dt -> {model | t = model.t + dt
                             , psy = if model.evolve 
-                                       then nextState model.psy model.evolutionSpeed model.ndt
+                                       then nextState model.psy model.evolutionSpeed model.ndt model.evolver
                                        else model.psy
                             }
              MouseMove p -> 
@@ -164,8 +177,12 @@ updateModel msg model =
              Faster -> { model | ndt = clamp 1 5 (model.ndt+1) }
              Slower -> { model | ndt = clamp 1 5 (model.ndt-1) }
              Say s -> { model | message = s }
-             Selected name -> case List.filter (\(f,n) -> n==name) waveFunctions of
+             WaveFun name -> case List.filter (\(_,n) -> n==name) waveFunctions of
                (fun, _)::_ -> {model | psy = initQS fun, evolve = False}
+               _ -> model
+             Potential name -> case List.filter (\(_,n,_) -> n==name) potentials of
+               (timeDer, _, p)::_ -> {model | evolver = mkEvolver timeDer,
+                                              potential = p, evolve = False}
                _ -> model
 
   in (mdl, Cmd.none)
@@ -193,6 +210,9 @@ drawFun f legs clr persp =
   in if legs then List.concatMap ballOnLeg points
              else List.map ball points
 
+
+-- Quantum State as array of numbers
+
 getQS : Int -> Array Complex -> Complex
 getQS i a = case Array.get i a of
   Just v -> v
@@ -200,7 +220,6 @@ getQS i a = case Array.get i a of
 
 useQS : Array Complex -> Int -> Complex
 useQS a i = getQS (i*5 + sizeQS // 2) a  -- for dx=0.02
--- useQS a i = getQS (i*10 + sizeQS // 2) a -- for dx=0.01
 
 dxQS a = Array.indexedMap (\i v -> 
   let c = getQS (i+1) a `sub` getQS (i-1) a in {re = c.re / (2*dx), im = c.im / (2*dx)}) a
@@ -215,19 +234,21 @@ mapQS f a = Array.map f a
 webglView : Model -> Html msg
 webglView mdl = 
   let persp = viewPersp mdl
-      --psy = if mdl.evolve then oscillate mdl.psy mdl.t else mdl.psy
       psy = useQS mdl.psy           
       psydx _ = dxQS mdl.psy 
       psydx2 = dx2QS mdl.psy
       dx2 _ = psydx2  
-      hpsy _ = mapQS (mult (complex -0.5 0)) psydx2 
+      hpsy _ = Array.indexedMap (\i qx ->
+                 add (mult (complex -0.5 0) qx) 
+                     (mult (complex (mdl.potential (ntox i)) 0) (getQS i mdl.psy))
+                ) psydx2
       mmnt _ = mapQS (mult (complex 0 -1)) (psydx 0) 
-      speed _ = mapQS (mult (complex 0 0.5)) psydx2  
+      speed _ = Array.indexedMap (\i qx ->
+                  sub (mult (complex 0 0.5) qx)
+                      (mult Complex.i (mult (complex (mdl.potential (ntox i)) 0) (getQS i mdl.psy)))
+                 ) psydx2  
       ampl _ = mapQS (\c -> complex (Complex.abs c) 0) mdl.psy
       draw f dsp clr = if dsp.show then drawFun (useQS (f 0)) dsp.leg clr persp else []
-      --nxt = evolveRK quantumState 0.1 mdl.psy
-      {-momentum x = mult (negation Complex.i) (psydx x)
-      dpdt x = mult minusIdT (hpsy x)-}
   in WebGL.toHtml
           [ width 700, height 700, style [("backgroundColor", "#404060")] ]
           (List.concat [
@@ -258,11 +279,15 @@ controls mdl =
   let ev = [
               p [] []
             ,  text' "Initial state: &nbsp; "
-            , select [on "change" (Json.Decode.map Selected targetValue)] 
-                (List.map (\(f,name) -> option [] [ text' name ]) waveFunctions)              
+            , select [on "change" (Json.Decode.map WaveFun targetValue)] 
+                (List.map (\(_,name) -> option [] [ text' name ]) waveFunctions) 
+            , p [] []
+            ,  text' "Potential: &nbsp; "
+            , select [on "change" (Json.Decode.map Potential targetValue)] 
+                (List.map (\(_,name,_) -> option [] [ text' name ]) potentials) 
             , p [] []              
             , input [ type' "checkbox", checked mdl.evolve, onCheck Evolve ] []
-            , text' "evolve &nbsp; "
+            , text' "Evolve! &nbsp; "
             , text' ("&nbsp;" ++ toString mdl.evolutionSpeed ++ "&nbsp; iterations per frame &nbsp;")
             , button [onClick IncEvSpd] [text "More"]
             , text' "&nbsp; &nbsp; "
@@ -332,17 +357,34 @@ mulByFloatQS k a = let ck = complex k 0 in Array.map (mult ck) a
 
 -- ih * d/dt = H   (Shr. Eq.)
 -- using free particle Hamiltonian (m=1, h=1, H = -1/2 * d2/dx2), d/dt = i/2 * d2/dx2
-timeDerQS a =
+timeDerFree a =
   Array.indexedMap (\i qx -> 
     let qleft = Maybe.withDefault zero (Array.get (i-1) a)
         qright = Maybe.withDefault zero (Array.get (i+1) a)
     in mult i2dx2 ((qright `add` qleft) `sub` (mult c2 qx))) a      
 
-quantumState : DiffVecSpace (Array Complex)
-quantumState = { add = addQS, mulByFloat = mulByFloatQS, timeDerivative = timeDerQS }
+mkEvolver : (Array Complex -> Array Complex) -> DiffVecSpace (Array Complex)
+mkEvolver timeDer = { add = addQS, mulByFloat = mulByFloatQS, timeDerivative = timeDer }
+
+ntox n = toFloat (n - sizeQS // 2) * dx
 
 initQS : (Float -> Complex) -> Array Complex
-initQS psy = Array.initialize sizeQS (\n -> psy (toFloat (n - (sizeQS // 2)) * dx))
+initQS psy = Array.initialize sizeQS (\n -> psy (ntox n))
+
+timeDerInPotential v a =
+  Array.indexedMap (\i qx -> 
+    let qleft = Maybe.withDefault zero (Array.get (i-1) a)
+        qright = Maybe.withDefault zero (Array.get (i+1) a)
+        x = ntox i
+        potEnergy = mult (complex (v x) 0) qx
+    in sub (mult i2dx2 ((qright `add` qleft) `sub` (mult c2 qx)))
+           (mult Complex.i potEnergy)  
+   ) a      
+
+timeDerLinearPotential = timeDerInPotential (\x -> 8*x)
+
+timeDerHarmonic = timeDerInPotential (\x -> 10*x*x)
+
 
 -- Meshes
 
