@@ -62,6 +62,8 @@ waveFunctions = [
      "just sin: sin x"),
     (\x -> complex (e ^ (-x*x)) 0,
      "Gauss: e^(-x^2)"),
+    (euler,
+     "Euler: e^(i*x)"),
     (\x -> mult (complex (e ^ (-0.3*x*x)) 0) (Complex.add (euler (x*2)) (euler (x*3))),
      "particle w=2 + w=3"),
     (\x -> mult (complex (e ^ (-0.3*x*x)) 0) (Complex.add (euler (x*2)) (euler (-x*3))),
@@ -69,11 +71,6 @@ waveFunctions = [
   ]
 
 particle x = mult (complex (e ^ (-1.5*x*x)) 0) (euler (x*2.0))
-part2 x = complex (2 * (sin x)* (e ^ (-0.5*x*x))) 0
-part3 x = mult (complex (e ^ (-0.1*x*x)) 0) (Complex.add (euler (x*2)) (euler (x*3)))
-ps x = [1, 1.3, 2.2] |> List.map (\w -> euler (x * w)) 
-          |> List.foldl Complex.add (complex 0 0) |> mult (complex (e ^ (-0.1*x*x)) 0)
-gauss x = complex (e ^ (-x*x)) 0 
 
 -- constants
 sizeQS = 1000 -- number of points in array
