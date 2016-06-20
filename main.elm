@@ -49,7 +49,6 @@ initialState = { t=0, angx=0, angy=0, drag=False, oldpos={x=0, y=0}, psy = initQ
                , message = ""
                }
 
-
 -- wave functions
 waveFunctions = [
     (\x -> mult (complex (e ^ (-1.5*x*x)) 0) (euler (x*2.0)),
@@ -79,7 +78,7 @@ particle x = mult (complex (e ^ (-1.5*x*x)) 0) (euler (x*2.0))
 -- potentials
 potentials = [
   (timeDerFree, "V=0, free particle", always 0.0),
-  (timeDerLinearPotential, "V(x) = 8 * x, linear potential", \x -> 8.0 * x),
+  (timeDerLinearPotential, "V(x) = 8 * x, linear potential", \x -> 8 * x),
   (timeDerHarmonic, "V(x) = 10*x*x, harmonic oscillator", \x -> 10*x*x)
  ] 
 
@@ -138,52 +137,43 @@ main = Html.program
     , update = updateModel
     }
 
-nextState a spd ndt evolver = 
-  List.foldl (\i s -> evolveRK evolver (0.0001* toFloat ndt) s) a [1..spd] |> tieEnds
-
-tieEnds a = Array.indexedMap (\i v -> 
-  if i < 50 then mult (complex (toFloat i / 50.0) 0) v
-  else if i > sizeQS - 50 then mult (complex (toFloat (sizeQS - 1 - i) / 50.0) 0) v
-  else v) a
-
-
 updateModel : Action -> Model -> (Model, Cmd Action)
 updateModel msg model = 
   let mdl = case msg of
-             MouseBttn down -> {model | drag = down}
-             NewFrame dt -> {model | t = model.t + dt
-                            , psy = if model.evolve 
-                                       then nextState model.psy model.evolutionSpeed model.ndt model.evolver
-                                       else model.psy
-                            }
-             MouseMove p -> 
-               if model.drag then               
-                 {model | angx = model.angx - toFloat (p.x - model.oldpos.x),
-                          angy = model.angy - toFloat (p.y - model.oldpos.y),
-                          oldpos = p}
-               else {model | oldpos = p}           
-             Evolve b -> {model | evolve = b}
-             PsyLeg b -> {model | psyLeg = b}
-             Show func b -> let dsp = getDisplay model func 
-                                dsp' = {dsp | show = b }
-                            in setDisplay model func dsp'
-             ShowLeg func b -> let dsp = getDisplay model func 
-                                   dsp' = {dsp | leg = b }
-                               in setDisplay model func dsp'
-             IncEvSpd -> {model | evolutionSpeed = model.evolutionSpeed * 2 }
-             DecEvSpd -> if model.evolutionSpeed >= 2 
-                           then {model | evolutionSpeed = model.evolutionSpeed // 2       }
-                           else model
-             Faster -> { model | ndt = clamp 1 5 (model.ndt+1) }
-             Slower -> { model | ndt = clamp 1 5 (model.ndt-1) }
-             Say s -> { model | message = s }
-             WaveFun name -> case List.filter (\(_,n) -> n==name) waveFunctions of
-               (fun, _)::_ -> {model | psy = initQS fun, evolve = False}
-               _ -> model
-             Potential name -> case List.filter (\(_,n,_) -> n==name) potentials of
-               (timeDer, _, p)::_ -> {model | evolver = mkEvolver timeDer,
-                                              potential = p, evolve = False}
-               _ -> model
+     MouseBttn down -> {model | drag = down}
+     NewFrame dt -> {model | t = model.t + dt
+                    , psy = if model.evolve 
+                               then nextState model.psy model.evolutionSpeed model.ndt model.evolver
+                               else model.psy
+                    }
+     MouseMove p -> 
+       if model.drag then               
+         {model | angx = model.angx - toFloat (p.x - model.oldpos.x),
+                  angy = model.angy - toFloat (p.y - model.oldpos.y),
+                  oldpos = p}
+       else {model | oldpos = p}           
+     Evolve b -> {model | evolve = b}
+     PsyLeg b -> {model | psyLeg = b}
+     Show func b -> let dsp = getDisplay model func 
+                        dsp' = {dsp | show = b }
+                    in setDisplay model func dsp'
+     ShowLeg func b -> let dsp = getDisplay model func 
+                           dsp' = {dsp | leg = b }
+                       in setDisplay model func dsp'
+     IncEvSpd -> {model | evolutionSpeed = model.evolutionSpeed * 2 }
+     DecEvSpd -> if model.evolutionSpeed >= 2 
+                   then {model | evolutionSpeed = model.evolutionSpeed // 2 }
+                   else model
+     Faster -> { model | ndt = clamp 1 5 (model.ndt+1) }
+     Slower -> { model | ndt = clamp 1 5 (model.ndt-1) }
+     Say s -> { model | message = s }
+     WaveFun name -> case List.filter (\(_,n) -> n==name) waveFunctions of
+       (fun, _)::_ -> {model | psy = initQS fun, evolve = False}
+       _ -> model
+     Potential name -> case List.filter (\(_,n,_) -> n==name) potentials of
+       (timeDer, _, p)::_ -> {model | evolver = mkEvolver timeDer,
+                                      potential = p, evolve = False}
+       _ -> model
 
   in (mdl, Cmd.none)
 
@@ -209,27 +199,6 @@ drawFun f legs clr persp =
         in [ball (x, c), cy]                                                  
   in if legs then List.concatMap ballOnLeg points
              else List.map ball points
-
-
--- Quantum State as array of numbers
-
-getQS : Int -> Array Complex -> Complex
-getQS i a = case Array.get i a of
-  Just v -> v
-  Nothing -> Array.get (clamp 0 (Array.length a - 1) i) a |> Maybe.withDefault zero     
-
-useQS : Array Complex -> Int -> Complex
-useQS a i = getQS (i*5 + sizeQS // 2) a  -- for dx=0.02
-
-dxQS a = Array.indexedMap (\i v -> 
-  let c = getQS (i+1) a `sub` getQS (i-1) a in {re = c.re / (2*dx), im = c.im / (2*dx)}) a
-           
-dx2QS a = Array.indexedMap (\i qx -> 
-  let qleft = Maybe.withDefault zero (Array.get (i-1) a)
-      qright = Maybe.withDefault zero (Array.get (i+1) a)
-  in mult overdx2 ((qright `add` qleft) `sub` (mult c2 qx))) a
-
-mapQS f a = Array.map f a 
 
 webglView : Model -> Html msg
 webglView mdl = 
@@ -262,8 +231,6 @@ webglView mdl =
              , (draw ampl mdl.ampl (vec3 0.5 0.5 0.5))
             ]
           )
-
-styleTop = style [("vertical-align","top")]
 
 displayCtrl mdl func caption clr =
   let dsp = getDisplay mdl func in
@@ -317,7 +284,7 @@ view : Model -> Html Action
 view mdl = 
   table [style [("backgroundColor", "#404060"), ("width", "100%")]] 
    [tr [] [td [style [("width", "700px")]] [webglView mdl],
-           td [styleTop] [controls mdl]
+           td [style [("vertical-align","top")]] [controls mdl]
           ]
    ]
 
@@ -329,6 +296,28 @@ viewPersp m =
   in mul (makePerspective 60 1 0.01 100)
          (makeLookAt campos (vec3 0 0 0) (vec3 0 1 0))
 
+-- Quantum State as array of numbers
+
+getQS : Int -> Array Complex -> Complex
+getQS i a = case Array.get i a of
+  Just v -> v
+  Nothing -> Array.get (clamp 0 (Array.length a - 1) i) a |> Maybe.withDefault zero     
+
+useQS : Array Complex -> Int -> Complex
+useQS a i = getQS (i*5 + sizeQS // 2) a  -- for dx=0.02
+
+dxQS a = Array.indexedMap (\i v -> 
+  let c = getQS (i+1) a `sub` getQS (i-1) a in {re = c.re / (2*dx), im = c.im / (2*dx)}) a
+           
+dx2QS a = Array.indexedMap (\i qx -> 
+  let qleft = Maybe.withDefault zero (Array.get (i-1) a)
+      qright = Maybe.withDefault zero (Array.get (i+1) a)
+  in mult overdx2 ((qright `add` qleft) `sub` (mult c2 qx))) a
+
+mapQS f a = Array.map f a 
+
+initQS : (Float -> Complex) -> Array Complex
+initQS psy = Array.initialize sizeQS (\n -> psy (ntox n))
 
 -- Time Evolution 
 
@@ -349,11 +338,9 @@ evolveRK ops dt state =
                                ops.mulByFloat (dt/3) c,
                                ops.mulByFloat (dt/6) d]
 
-
 addQS a b = Array.indexedMap (\i x -> x `add` (Maybe.withDefault zero (Array.get i b))) a
 
 mulByFloatQS k a = let ck = complex k 0 in Array.map (mult ck) a
-
 
 -- ih * d/dt = H   (Shr. Eq.)
 -- using free particle Hamiltonian (m=1, h=1, H = -1/2 * d2/dx2), d/dt = i/2 * d2/dx2
@@ -366,10 +353,15 @@ timeDerFree a =
 mkEvolver : (Array Complex -> Array Complex) -> DiffVecSpace (Array Complex)
 mkEvolver timeDer = { add = addQS, mulByFloat = mulByFloatQS, timeDerivative = timeDer }
 
-ntox n = toFloat (n - sizeQS // 2) * dx
+nextState a spd ndt evolver = 
+  List.foldl (\i s -> evolveRK evolver (0.0001 * toFloat ndt) s) a [1..spd] |> tieEnds
 
-initQS : (Float -> Complex) -> Array Complex
-initQS psy = Array.initialize sizeQS (\n -> psy (ntox n))
+tieEnds a = Array.indexedMap (\i v -> 
+  if i < 50 then mult (complex (toFloat i / 50.0) 0) v
+  else if i > sizeQS - 50 then mult (complex (toFloat (sizeQS - 1 - i) / 50.0) 0) v
+  else v) a
+
+ntox n = toFloat (n - sizeQS // 2) * dx
 
 timeDerInPotential v a =
   Array.indexedMap (\i qx -> 
@@ -382,9 +374,7 @@ timeDerInPotential v a =
    ) a      
 
 timeDerLinearPotential = timeDerInPotential (\x -> 8*x)
-
 timeDerHarmonic = timeDerInPotential (\x -> 10*x*x)
-
 
 -- Meshes
 
@@ -409,7 +399,6 @@ row y = List.append (if y < nY then row0 y else []) (if y > 1 then row1 y else [
 
 sphere : Drawable Vertex
 sphere = Triangle (List.concatMap row [1..nY])
-
 
 cylinder : Drawable Vertex
 cylinder = let cyrow n = 
