@@ -1,15 +1,16 @@
 import Math.Vector3 exposing (Vec3, vec3)
 import Math.Matrix4 exposing (..)
 import WebGL exposing (..)
-import Html exposing (Html, text, div, span, tr, td, table, input, br, p, button)
+import Html exposing (Html, text, div, span, tr, td, table, input, br, p, button, select, option)
 import Html.App as Html
 import Html.Attributes exposing (width, height, style, checked, type')
-import Html.Events exposing (onCheck, onClick)
+import Html.Events exposing (onCheck, onClick, targetValue, on)
 import AnimationFrame
 import Complex exposing (arg, complex, abs, Complex, sub, add, i, mult, negation, euler, zero)
 import Mouse
 import Array exposing (Array)
 import Unicode exposing (text')
+import Json.Decode
 
 type alias Vertex = { position : Vec3, color : Vec3 }
 type alias Display = { show : Bool, leg : Bool }
@@ -26,7 +27,8 @@ type alias Model = { t : Float, angx : Float, angy : Float
                    , h : Display
                    , momentum : Display
                    , speed : Display
-                   , ampl : Display                 
+                   , ampl : Display         
+                   , message : String
                    }
 
 initialState = { t=0, angx=0, angy=0, drag=False, oldpos={x=0, y=0}, psy = initQS particle
@@ -40,10 +42,32 @@ initialState = { t=0, angx=0, angy=0, drag=False, oldpos={x=0, y=0}, psy = initQ
                , momentum = {show=False, leg=False}
                , speed = {show=False, leg=False}
                , ampl = {show=False, leg=False}
+               , message = ""
                }
 
 
 -- wave functions
+waveFunctions = [
+    (\x -> mult (complex (e ^ (-1.5*x*x)) 0) (euler (x*2.0)),
+     "particle w=2: e^(-1.5x^2) * e^(i*2*x)"),
+    (\x -> mult (complex (e ^ (-1.5*x*x)) 0) (euler (x*4.0)),
+     "particle w=4: e^(-1.5x^2) * e^(i*4*x)"),
+    (\x -> mult (complex (e ^ (-1.5*x*x)) 0) (euler (-x*2.0)),
+     "particle w=-2: e^(-1.5x^2) * e^(-i*2*x)"),
+    (\x -> complex (2 * (sin x) * (e ^ (-0.5*x*x))) 0,
+     "damped real sin: 2 * sin x * e^(-0.5x^2)"),
+    (\x -> complex (2 * (cos x) * (e ^ (-0.5*x*x))) 0,
+     "damped real cos: 2 * cos x * e^(-0.5x^2)"),
+    (\x -> complex (sin x) 0,
+     "just sin: sin x"),
+    (\x -> complex (e ^ (-x*x)) 0,
+     "Gauss: e^(-x^2)"),
+    (\x -> mult (complex (e ^ (-0.3*x*x)) 0) (Complex.add (euler (x*2)) (euler (x*3))),
+     "particle w=2 + w=3"),
+    (\x -> mult (complex (e ^ (-0.3*x*x)) 0) (Complex.add (euler (x*2)) (euler (-x*3))),
+     "particle w=2 + w=-3")
+  ]
+
 particle x = mult (complex (e ^ (-1.5*x*x)) 0) (euler (x*2.0))
 part2 x = complex (2 * (sin x)* (e ^ (-0.5*x*x))) 0
 part3 x = mult (complex (e ^ (-0.1*x*x)) 0) (Complex.add (euler (x*2)) (euler (x*3)))
@@ -73,6 +97,8 @@ type Action = MouseMove Mouse.Position
             | Slower
             | IncEvSpd
             | DecEvSpd
+            | Say String
+            | Selected String
 
 getDisplay mdl func = case func of
   Dx -> mdl.dx
@@ -103,7 +129,13 @@ main = Html.program
     , update = updateModel
     }
 
-nextState a spd ndt = List.foldl (\i s -> evolveRK quantumState (0.0001* toFloat ndt) s) a [1..spd]
+nextState a spd ndt = List.foldl (\i s -> evolveRK quantumState (0.0001* toFloat ndt) s) a [1..spd] |> tieEnds
+
+tieEnds a = Array.indexedMap (\i v -> 
+  if i < 50 then mult (complex (toFloat i / 50.0) 0) v
+  else if i > sizeQS - 50 then mult (complex (toFloat (sizeQS - 1 - i) / 50.0) 0) v
+  else v) a
+
 
 updateModel : Action -> Model -> (Model, Cmd Action)
 updateModel msg model = 
@@ -134,6 +166,11 @@ updateModel msg model =
                            else model
              Faster -> { model | ndt = clamp 1 5 (model.ndt+1) }
              Slower -> { model | ndt = clamp 1 5 (model.ndt-1) }
+             Say s -> { model | message = s }
+             Selected name -> case List.filter (\(f,n) -> n==name) waveFunctions of
+               (fun, _)::_ -> {model | psy = initQS fun, evolve = False}
+               _ -> model
+
   in (mdl, Cmd.none)
 
 drawFun : (Int -> Complex) -> Bool -> Vec3 -> Mat4 -> List Renderable
@@ -222,7 +259,12 @@ displayCtrl mdl func caption clr =
 
 controls mdl = 
   let ev = [
-             input [ type' "checkbox", checked mdl.evolve, onCheck Evolve ] []
+              p [] []
+            ,  text' "Initial state: &nbsp; "
+            , select [on "change" (Json.Decode.map Selected targetValue)] 
+                (List.map (\(f,name) -> option [] [ text' name ]) waveFunctions)              
+            , p [] []              
+            , input [ type' "checkbox", checked mdl.evolve, onCheck Evolve ] []
             , text' "evolve &nbsp; "
             , text' ("&nbsp;" ++ toString mdl.evolutionSpeed ++ "&nbsp; iterations per frame &nbsp;")
             , button [onClick IncEvSpd] [text "More"]
@@ -246,6 +288,7 @@ controls mdl =
               , displayCtrl mdl Momentum "Momentum   " "#FF8080"
               , displayCtrl mdl Speed "d/dt &Psi;   " "#FF0000"
               , displayCtrl mdl Ampl "&Psi; amplitude   " "#808080"
+              , [text mdl.message]
               ])
 
 view : Model -> Html Action
