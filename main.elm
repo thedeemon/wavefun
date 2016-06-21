@@ -13,7 +13,7 @@ import Unicode exposing (text')
 import Json.Decode
 
 type alias Vertex = { position : Vec3, color : Vec3 }
-type alias Display = { show : Bool, leg : Bool }
+type alias Display = { show : Bool, leg : Bool, off : Bool }
 
 type alias Model = { t : Float, angx : Float, angy : Float
                    , drag : Bool, oldpos : Mouse.Position
@@ -40,12 +40,12 @@ initialState = { t=0, angx=0, angy=0, drag=False, oldpos={x=0, y=0}, psy = initQ
                , evolver = mkEvolver timeDerFree
                , potential = always 0.0
                , psyLeg = False
-               , dx = {show=False, leg=False}
-               , dx2 = {show=False, leg=False}
-               , h = {show=False, leg=False}
-               , momentum = {show=False, leg=False}
-               , speed = {show=False, leg=False}
-               , ampl = {show=False, leg=False}
+               , dx = {show=False, leg=False, off=True}
+               , dx2 = {show=False, leg=False, off=False}
+               , h = {show=False, leg=False, off=False}
+               , momentum = {show=False, leg=False, off=False}
+               , speed = {show=False, leg=False, off=True}
+               , ampl = {show=False, leg=False, off=False}
                , message = ""
                }
 
@@ -76,10 +76,14 @@ waveFunctions = [
 particle x = mult (complex (e ^ (-1.5*x*x)) 0) (euler (x*2.0))
 
 -- potentials
+potZero = always 0.0
+potLinear x = 8 * x
+potHarmonic x = 10*x*x
+
 potentials = [
-  (timeDerFree, "V=0, free particle", always 0.0),
-  (timeDerLinearPotential, "V(x) = 8 * x, linear potential", \x -> 8 * x),
-  (timeDerHarmonic, "V(x) = 10*x*x, harmonic oscillator", \x -> 10*x*x)
+  (timeDerFree, "V=0, free particle", potZero),
+  (timeDerLinearPotential, "V(x) = 8 * x, linear potential", potLinear),
+  (timeDerHarmonic, "V(x) = 10*x*x, harmonic oscillator", potHarmonic)
  ] 
 
 -- constants
@@ -100,6 +104,7 @@ type Action = MouseMove Mouse.Position
             | PsyLeg Bool
             | Show Func Bool
             | ShowLeg Func Bool
+            | ShowOff Func Bool
             | Faster
             | Slower
             | IncEvSpd
@@ -124,6 +129,8 @@ setDisplay mdl func dsp = case func of
   Speed -> { mdl | speed = dsp }
   Ampl -> { mdl | ampl = dsp }
 
+updDisplay model func setter = setDisplay model func <| setter <| getDisplay model func 
+
 main : Program Never
 main = Html.program
     { init = (initialState, Cmd.none)
@@ -144,8 +151,7 @@ updateModel msg model =
      NewFrame dt -> {model | t = model.t + dt
                     , psy = if model.evolve 
                                then nextState model.psy model.evolutionSpeed model.ndt model.evolver
-                               else model.psy
-                    }
+                               else model.psy }
      MouseMove p -> 
        if model.drag then               
          {model | angx = model.angx - toFloat (p.x - model.oldpos.x),
@@ -154,12 +160,9 @@ updateModel msg model =
        else {model | oldpos = p}           
      Evolve b -> {model | evolve = b}
      PsyLeg b -> {model | psyLeg = b}
-     Show func b -> let dsp = getDisplay model func 
-                        dsp' = {dsp | show = b }
-                    in setDisplay model func dsp'
-     ShowLeg func b -> let dsp = getDisplay model func 
-                           dsp' = {dsp | leg = b }
-                       in setDisplay model func dsp'
+     Show func b -> updDisplay model func (\d -> {d | show = b})
+     ShowLeg func b -> updDisplay model func (\d -> {d | leg = b})
+     ShowOff func b -> updDisplay model func (\d -> {d | off = b})
      IncEvSpd -> {model | evolutionSpeed = model.evolutionSpeed * 2 }
      DecEvSpd -> if model.evolutionSpeed >= 2 
                    then {model | evolutionSpeed = model.evolutionSpeed // 2 }
@@ -174,29 +177,28 @@ updateModel msg model =
        (timeDer, _, p)::_ -> {model | evolver = mkEvolver timeDer,
                                       potential = p, evolve = False}
        _ -> model
-
   in (mdl, Cmd.none)
 
-drawFun : (Int -> Complex) -> Bool -> Vec3 -> Mat4 -> List Renderable
-drawFun f legs clr persp = 
-  let points = [-50..49] |> List.map (\n -> 
-        let x = toFloat n * 0.1 
-            c = f n
-        in (x,c))
-      ball (x, c) = 
-        render sphVertSh sphFragSh sphere { perspective = persp, pos = vec3 x c.re c.im, clr=clr }
-      ballOnLeg (x, c) =
+drawFun : (Int -> Complex) -> Bool -> Vec3 -> Mat4 -> (Int -> Complex) -> Bool -> List Renderable
+drawFun f legs clr persp npsy off = 
+  let points = [-50..49] |> List.map (\n -> (toFloat n * 0.1, shorten (f n), npsy n))
+      shorten c = if off then mult (complex 0.25 0) c else c
+      ball (x, c, p) = 
+        let pos = if off then vec3 x (c.re + p.re) (c.im + p.im) else vec3 x c.re c.im
+        in render sphVertSh sphFragSh sphere { perspective = persp, pos = pos, clr = clr }
+      ballOnLeg (x, c, p) =
         let r = Complex.abs c
             a = arg c    
+            transfun = if off then translate3 x p.re p.im else translate3 x 0 0
             tr = Math.Matrix4.identity 
-                  |> translate3 x 0 0 
+                  |> transfun 
                   |> rotate a (vec3 1 0 0)
                   |> scale3 0.04 r 0.04 
             rot = Math.Matrix4.identity |> rotate a (vec3 1 0 0)              
-            p = mul persp tr
-            cy = render cylVertShdr cylFragShdr cylinder {perspective = p, pos = vec3 0 0 0, 
+            per = mul persp tr
+            cy = render cylVertShdr cylFragShdr cylinder {perspective = per, pos = vec3 0 0 0, 
                                                           clr = clr, tfm = rot}
-        in [ball (x, c), cy]                                                  
+        in [ball (x, c, p), cy]                                                  
   in if legs then List.concatMap ballOnLeg points
              else List.map ball points
 
@@ -217,12 +219,12 @@ webglView mdl =
                       (mult Complex.i (mult (complex (mdl.potential (ntox i)) 0) (getQS i mdl.psy)))
                  ) psydx2  
       ampl _ = mapQS (\c -> complex (Complex.abs c) 0) mdl.psy
-      draw f dsp clr = if dsp.show then drawFun (useQS (f 0)) dsp.leg clr persp else []
+      draw f dsp clr = if dsp.show then drawFun (useQS (f 0)) dsp.leg clr persp psy dsp.off else []
   in WebGL.toHtml
           [ width 700, height 700, style [("backgroundColor", "#404060")] ]
           (List.concat [
              [axis persp] 
-             , (drawFun psy mdl.psyLeg (vec3 0 1 0) persp)
+             , (drawFun psy mdl.psyLeg (vec3 0 1 0) persp psy False)
              , (draw psydx mdl.dx (vec3 0 0 1)) 
              , (draw dx2 mdl.dx2 (vec3 0 0 0.5))
              , (draw hpsy mdl.h (vec3 1 0.5 0)) 
@@ -233,19 +235,19 @@ webglView mdl =
           )
 
 displayCtrl mdl func caption clr =
-  let dsp = getDisplay mdl func in
-  [
-      input [ type' "checkbox", checked dsp.show, onCheck (Show func) ] []
-    , span [style [("color", clr)]] [text' caption]
-    , input [ type' "checkbox", checked dsp.leg, onCheck (ShowLeg func) ] []
-    , text "as vector"
-    , br [] []
-  ]  
+  let dsp = getDisplay mdl func in [
+          input [ type' "checkbox", checked dsp.show, onCheck (Show func) ] []
+        , span [style [("color", clr)]] [text' caption]
+        , input [ type' "checkbox", checked dsp.leg, onCheck (ShowLeg func) ] []
+        , text' "as vector &nbsp; "
+        , input [ type' "checkbox", checked dsp.off, onCheck (ShowOff func) ] []
+        , text' "from &Psi; (scaled down)"
+        , br [] []
+        ]  
 
 controls mdl = 
-  let ev = [
-              p [] []
-            ,  text' "Initial state: &nbsp; "
+  let ev = [  p [] []
+            , text' "Initial state: &nbsp; "
             , select [on "change" (Json.Decode.map WaveFun targetValue)] 
                 (List.map (\(_,name) -> option [] [ text' name ]) waveFunctions) 
             , p [] []
@@ -342,14 +344,6 @@ addQS a b = Array.indexedMap (\i x -> x `add` (Maybe.withDefault zero (Array.get
 
 mulByFloatQS k a = let ck = complex k 0 in Array.map (mult ck) a
 
--- ih * d/dt = H   (Shr. Eq.)
--- using free particle Hamiltonian (m=1, h=1, H = -1/2 * d2/dx2), d/dt = i/2 * d2/dx2
-timeDerFree a =
-  Array.indexedMap (\i qx -> 
-    let qleft = Maybe.withDefault zero (Array.get (i-1) a)
-        qright = Maybe.withDefault zero (Array.get (i+1) a)
-    in mult i2dx2 ((qright `add` qleft) `sub` (mult c2 qx))) a      
-
 mkEvolver : (Array Complex -> Array Complex) -> DiffVecSpace (Array Complex)
 mkEvolver timeDer = { add = addQS, mulByFloat = mulByFloatQS, timeDerivative = timeDer }
 
@@ -363,6 +357,14 @@ tieEnds a = Array.indexedMap (\i v ->
 
 ntox n = toFloat (n - sizeQS // 2) * dx
 
+-- ih * d/dt = H   (Shr. Eq.)
+-- using free particle Hamiltonian (m=1, h=1, H = -1/2 * d2/dx2), d/dt = i/2 * d2/dx2
+timeDerFree a =
+  Array.indexedMap (\i qx -> 
+    let qleft = Maybe.withDefault zero (Array.get (i-1) a)
+        qright = Maybe.withDefault zero (Array.get (i+1) a)
+    in mult i2dx2 ((qright `add` qleft) `sub` (mult c2 qx))) a      
+
 timeDerInPotential v a =
   Array.indexedMap (\i qx -> 
     let qleft = Maybe.withDefault zero (Array.get (i-1) a)
@@ -373,8 +375,8 @@ timeDerInPotential v a =
            (mult Complex.i potEnergy)  
    ) a      
 
-timeDerLinearPotential = timeDerInPotential (\x -> 8*x)
-timeDerHarmonic = timeDerInPotential (\x -> 10*x*x)
+timeDerLinearPotential = timeDerInPotential potLinear
+timeDerHarmonic = timeDerInPotential potHarmonic
 
 -- Meshes
 
